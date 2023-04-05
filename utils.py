@@ -62,7 +62,7 @@ def hough_lines(image, rho, theta, threshold, min_line_length, max_line_gap):
     )
 
 
-def draw_lines(image, lines, color=(0, 0, 255), thickness=2):
+def draw_lines(image, lines, color=(0, 0, 255), thickness=10):
     """Draw line segments onto the image"""
     for line in lines:
         for x1, y1, x2, y2 in line:
@@ -74,6 +74,64 @@ def weighted_img(image_1, alpha, image_2, beta, gamma):
     return cv2.addWeighted(image_1, alpha, image_2, beta, gamma)
 
 
+def split_left_right_lines(lines):
+    """Split the lines into left and right lane lines."""
+    left_lane_lines = []
+    right_lane_lines = []
+
+    for line in lines:
+        for x1, y1, x2, y2 in line:
+            if x2 == x1:
+                continue
+
+            slope = (y2 - y1) / (x2 - x1)
+            if slope < 0:
+                left_lane_lines.append(line)
+            else:
+                right_lane_lines.append(line)
+
+    return left_lane_lines, right_lane_lines
+
+
+def calculate_average_slope(lines):
+    """Calculate the average slope of left and right lane lines."""
+    slope = 0
+    for line in lines:
+        for x1, y1, x2, y2 in line:
+            slope += (y2 - y1) / (x2 - x1)
+
+    return slope / len(lines)
+
+
+def extrapolate_lines(lines, y_min, y_max):
+    """Extrapolate the line segments to get the full extent of the lane lines"""
+    left_lines, right_lines = split_left_right_lines(lines)
+    left_lane_line_slope = calculate_average_slope(left_lines)
+    right_lane_line_slope = calculate_average_slope(right_lines)
+    left_lines_mean = np.mean(left_lines, axis=0)
+    right_lines_mean = np.mean(right_lines, axis=0)
+
+    x1_left = int(
+        (y_min - left_lines_mean[0][1]) / left_lane_line_slope + left_lines_mean[0][0]
+    )
+    x2_left = int(
+        (y_max - left_lines_mean[0][1]) / left_lane_line_slope + left_lines_mean[0][0]
+    )
+    x1_right = int(
+        (y_min - right_lines_mean[0][1]) / right_lane_line_slope
+        + right_lines_mean[0][0]
+    )
+    x2_right = int(
+        (y_max - right_lines_mean[0][1]) / right_lane_line_slope
+        + right_lines_mean[0][0]
+    )
+
+    return np.array(
+        [[[x1_left, y_min, x2_left, y_max], [x1_right, y_min, x2_right, y_max]]],
+        dtype=np.int32,
+    )
+
+
 def process_image(image):
     """Detect lane lines in the image and return the image with lane lines drawn on it."""
     color_selected = color_selection(image)
@@ -83,14 +141,21 @@ def process_image(image):
     edges = canny(blurred_gray, 50, 150)
 
     h, w = image.shape[:2]
+    lower_left = [w / 9, h]
+    lower_right = [w * 8 / 9, h]
+    top_left = [w / 2 - w / 8, h / 2 + h / 10]
+    top_right = [w / 2 + w / 8, h / 2 + h / 10]
     vertices = np.array(
-        [[(0, h), (w / 2 - 45, h / 2 + 60), (w / 2 + 45, h / 2 + 60), (w, h)]],
+        [[lower_left, top_left, top_right, lower_right]],
         dtype=np.int32,
     )
     edges = region_of_interest(edges, vertices)
 
-    lines = hough_lines(edges, 1, np.pi / 180.0, 20, 20, 100)
+    lines = hough_lines(edges, 1, np.pi / 180.0, 30, 20, 200)
+
+    lane_lines = extrapolate_lines(lines, h / 2 + h / 10, h)
+
     line_image = np.zeros_like(image)
-    draw_lines(line_image, lines)
+    draw_lines(line_image, lane_lines)
 
     return weighted_img(image, 0.8, line_image, 1.0, 0.0)
